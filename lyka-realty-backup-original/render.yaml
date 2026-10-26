@@ -1,36 +1,48 @@
+
 services:
+  # FastAPI Backend
   - type: web
     name: lyka-realty-ai
     runtime: python
     plan: starter
+    rootDir: lyka-realty-backup-original
     buildCommand: pip install -r backend/requirements.txt
     startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
       - key: APP_ENV
         value: production
+
       - key: DATABASE_URL
         fromDatabase:
           name: lyka-realty-db
           property: connectionString
+
       - key: JWT_SECRET
         generateValue: true
+
       - key: AI_PROVIDER
         value: gemini
+
       - key: GEMINI_API_KEY
         sync: false
+
       - key: OPENAI_API_KEY
         sync: false
+
       - key: CORS_ORIGINS
         value: '["https://lyka-realty-web.onrender.com"]'
+
       - key: PYTHON_VERSION
         value: 3.12.8
 
-  - type: static
+  # React Frontend
+  - type: web
     name: lyka-realty-web
-    rootDir: frontend
+    runtime: static
+    rootDir: lyka-realty-backup-original/frontend
     buildCommand: npm ci && npm run build
-    staticPublishPath: dist
+    staticPublishPath: lyka-realty-backup-original/frontend/dist
     envVars:
       - key: VITE_API_URL
         value: https://lyka-realty-ai.onrender.com/api
@@ -39,6 +51,7 @@ services:
         source: /*
         destination: /index.html
 
+# PostgreSQL Database
 databases:
   - name: lyka-realty-db
     plan: basic-256mb
