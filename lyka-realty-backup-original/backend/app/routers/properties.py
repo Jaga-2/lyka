@@ -1,0 +1,264 @@
+import json
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+from sqlalchemy import func, or_
+from typing import Optional, List
+
+from ..database import get_db
+from ..models.property import Property
+from ..schemas.property import (
+    PropertyResponse,
+    PropertySearchRequest,
+    PropertySearchResponse,
+    PropertyCompareRequest,
+    PropertyCompareResponse,
+)
+from ..services.match_service import calculate_explainable_match
+
+router = APIRouter(prefix="/properties", tags=["Properties"])
+
+def to_response_dto(prop: Property, reqs: dict = None) -> PropertyResponse:
+    amenities_list = []
+    if prop.amenities:
+        try:
+            amenities_list = json.loads(prop.amenities)
+        except Exception:
+            amenities_list = [a.strip() for a in prop.amenities.split(",") if a.strip()]
+
+    images_list = []
+    if prop.images:
+        try:
+            images_list = json.loads(prop.images)
+        except Exception:
+            images_list = [prop.images]
+
+    score, reasons = calculate_explainable_match(prop, reqs or {})
+
+    return PropertyResponse(
+        id=prop.id,
+        title=prop.title,
+        address=prop.address,
+        location=prop.location,
+        city=prop.city,
+        rent_price=prop.rent_price,
+        sale_price=prop.sale_price if prop.sale_price and prop.sale_price > 0 else None,
+        currency=prop.currency,
+        beds=prop.beds,
+        baths=prop.baths,
+        property_type=prop.property_type,
+        area_sqft=prop.area_sqft,
+        rent_per_sqft=prop.rent_per_sqft,
+        furnishing=prop.furnishing,
+        purpose=prop.purpose,
+        latitude=prop.latitude,
+        longitude=prop.longitude,
+        amenities=amenities_list,
+        images=images_list,
+        match_score=score,
+        match_reasons=reasons,
+        investment_yield=prop.investment_yield,
+        is_active=prop.is_active,
+    )
+
+@router.post("/search", response_model=PropertySearchResponse)
+def search_properties(body: PropertySearchRequest, db: Session = Depends(get_db)):
+    query = db.query(Property).filter(Property.is_active.is_(True))
+
+    if body.query:
+        q = f"%{body.query}%"
+        query = query.filter(
+            or_(
+                Property.title.ilike(q),
+                Property.address.ilike(q),
+                Property.location.ilike(q),
+            )
+        )
+
+    if body.location:
+        query = query.filter(
+            or_(
+                Property.location.ilike(f"%{body.location}%"),
+                Property.address.ilike(f"%{body.location}%"),
+            )
+        )
+
+    if body.purpose:
+        query = query.filter(Property.purpose.ilike(body.purpose))
+
+    if body.city:
+        query = query.filter(Property.city.ilike(f"%{body.city}%"))
+
+    if body.beds is not None:
+        query = query.filter(Property.beds == body.beds)
+
+    if body.baths is not None:
+        query = query.filter(Property.baths >= body.baths)
+
+    if body.property_type:
+        query = query.filter(Property.property_type.ilike(f"%{body.property_type}%"))
+
+    if body.furnishing:
+        query = query.filter(Property.furnishing.ilike(f"%{body.furnishing}%"))
+
+    is_rent = body.purpose != "For Sale"
+    if body.min_price is not None:
+        if is_rent:
+            query = query.filter(Property.rent_price >= body.min_price)
+        else:
+            query = query.filter(Property.sale_price >= body.min_price)
+
+    if body.max_price is not None:
+        if is_rent:
+            query = query.filter(Property.rent_price <= body.max_price)
+        else:
+            query = query.filter(Property.sale_price <= body.max_price)
+
+    # Sort
+    if body.sort_by == "price_desc":
+        query = query.order_by(Property.rent_price.desc() if is_rent else Property.sale_price.desc())
+    elif body.sort_by == "beds":
+        query = query.order_by(Property.beds.desc())
+    elif body.sort_by == "area":
+        query = query.order_by(Property.area_sqft.desc())
+    else:
+        query = query.order_by(Property.rent_price.asc() if is_rent else Property.sale_price.asc())
+
+    total = query.count()
+    items = query.offset(body.offset or 0).limit(body.limit or 30).all()
+
+    reqs_ctx = {
+        "location": body.location,
+        "bedrooms": body.beds,
+        "budget": body.max_price,
+        "property_type": body.property_type,
+        "buy_or_rent": "rent" if is_rent else "buy",
+    }
+
+    dtos = [to_response_dto(p, reqs_ctx) for p in items]
+    return PropertySearchResponse(
+        properties=dtos,
+        total=total,
+        page=(body.offset or 0) // (body.limit or 30) + 1,
+        limit=body.limit or 30,
+    )
+
+@router.get("/featured", response_model=List[PropertyResponse])
+def get_featured(db: Session = Depends(get_db)):
+    props = db.query(Property).filter(
+        Property.is_active.is_(True),
+        Property.location.ilike("%Dubai Marina%")
+    ).limit(6).all()
+    if not props:
+        props = db.query(Property).filter(Property.is_active.is_(True)).limit(6).all()
+    return [to_response_dto(p) for p in props]
+
+@router.get("/filter-options")
+def get_filter_options(db: Session = Depends(get_db)):
+    locations = [
+        location
+        for (location,) in db.query(Property.location).filter(Property.is_active.is_(True))
+        .filter(Property.location.isnot(None), Property.location != "")
+        .distinct()
+        .order_by(Property.location)
+        .all()
+    ]
+    types = [
+        property_type
+        for (property_type,) in db.query(Property.property_type).filter(Property.is_active.is_(True))
+        .filter(Property.property_type.isnot(None), Property.property_type != "")
+        .distinct()
+        .order_by(Property.property_type)
+        .all()
+    ]
+    cities = [
+        city
+        for (city,) in db.query(Property.city).filter(Property.is_active.is_(True))
+        .filter(Property.city.isnot(None), Property.city != "")
+        .distinct()
+        .order_by(Property.city)
+        .all()
+    ]
+    max_price = db.query(func.max(Property.rent_price)).filter(Property.is_active.is_(True)).scalar() or 0
+    return {
+        "locations": locations,
+        "property_types": types,
+        "cities": cities,
+        "max_price": max_price,
+    }
+
+@router.get("/{id}", response_model=PropertyResponse)
+def get_property(id: int, requirements: Optional[str] = None, db: Session = Depends(get_db)):
+    prop = db.query(Property).filter(Property.id == id, Property.is_active.is_(True)).first()
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    reqs = {}
+    if requirements:
+        try:
+            reqs = json.loads(requirements)
+        except Exception:
+            pass
+
+    return to_response_dto(prop, reqs)
+
+@router.post("/compare", response_model=PropertyCompareResponse)
+def compare_properties(body: PropertyCompareRequest, db: Session = Depends(get_db)):
+    if not body.property_ids:
+        raise HTTPException(status_code=400, detail="No properties selected for comparison")
+
+    props = db.query(Property).filter(Property.id.in_(body.property_ids), Property.is_active.is_(True)).all()
+    if not props:
+        raise HTTPException(status_code=404, detail="Selected properties not found")
+
+    dtos = [to_response_dto(p) for p in props]
+
+    def listed_price(prop: Property) -> Optional[float]:
+        price = prop.rent_price if prop.purpose == "For Rent" else prop.sale_price
+        return price if price is not None and price > 0 else None
+
+    properties_with_prices = [prop for prop in props if listed_price(prop) is not None]
+    cheapest = min(properties_with_prices, key=listed_price) if properties_with_prices else None
+
+    sorted_by_area = sorted(props, key=lambda x: x.area_sqft, reverse=True)
+    largest = sorted_by_area[0]
+
+    price_label = "annual rent" if all(prop.purpose == "For Rent" for prop in props) else "listed price"
+    summary_lines = [f"Comparing {len(props)} selected UAE listings:"]
+    if cheapest:
+        summary_lines.append(
+            f"• Lowest {price_label}: {cheapest.title} at AED {listed_price(cheapest):,.0f}."
+        )
+    else:
+        summary_lines.append("• No listed price is available for these properties.")
+    summary_lines.append(
+        f"• Largest area: {largest.title} at {largest.area_sqft:,.0f} sqft across {largest.beds} bedrooms."
+    )
+    summary = "\n".join(summary_lines)
+
+    recommendation = (
+        f"{cheapest.title} has the lowest listed {price_label}. "
+        f"{largest.title} has the largest listed area ({largest.area_sqft:,.0f} sqft)."
+        if cheapest
+        else f"{largest.title} has the largest listed area ({largest.area_sqft:,.0f} sqft)."
+    )
+
+    pros_cons = {}
+    for p in props:
+        pros = [f"Listed location: {p.location}", f"Purpose: {p.purpose}"]
+        if listed_price(p) > 0:
+            price_period = " per year" if p.purpose == "For Rent" else ""
+            pros.append(f"Listed price: AED {listed_price(p):,.0f}{price_period}")
+        if p.furnishing:
+            pros.append(f"Furnishing: {p.furnishing}")
+        cons = []
+        if p.beds < 2:
+            cons.append("Single bedroom or studio configuration")
+
+        pros_cons[p.id] = {"pros": pros, "cons": cons}
+
+    return PropertyCompareResponse(
+        properties=dtos,
+        comparison_summary=summary,
+        recommendation=recommendation,
+        pros_cons=pros_cons,
+    )

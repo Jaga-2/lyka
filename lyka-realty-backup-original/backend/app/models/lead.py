@@ -1,0 +1,41 @@
+from sqlalchemy import Column, Integer, String, Float, Text, DateTime
+from datetime import datetime
+from ..database import Base
+
+class Lead(Base):
+    __tablename__ = "leads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, nullable=True)
+    customer_name = Column(String(255), nullable=False)
+    customer_email = Column(String(255), nullable=False)
+    customer_phone = Column(String(50), nullable=True)
+    conversation_id = Column(String(100), nullable=True)
+    intent = Column(String(50), nullable=True)
+    budget = Column(Float, nullable=True)
+    budget_min = Column(Float, nullable=True)
+    budget_max = Column(Float, nullable=True)
+    location = Column(String(255), nullable=True)
+    preferred_location = Column(String(255), nullable=True)
+    bedrooms = Column(Integer, nullable=True)
+    property_type = Column(String(100), nullable=True)
+    furnished = Column(Integer, nullable=True)
+    interested_property_id = Column(Integer, nullable=True)
+    site_visit_id = Column(Integer, nullable=True)
+    preferred_language = Column(String(20), nullable=True)
+    assigned_employee_id = Column(Integer, nullable=True)
+    timeline = Column(String(100), nullable=True)
+    lead_score = Column(Integer, default=70)
+    lead_status = Column(String(50), default="NEW", index=True)
+    score_factors = Column(Text, nullable=True)
+    requirements_summary = Column(Text, nullable=True)
+    conversation_summary = Column(Text, nullable=True)
+    follow_up_notes = Column(Text, nullable=True)
+    lead_source = Column(String(50), default="AI_CHAT", nullable=True)
+    contact_preference = Column(String(50), default="ANY", nullable=True)
+    consent_contact = Column(Integer, default=1, nullable=True)
+    follow_up_date = Column(DateTime, nullable=True)
+    score_override = Column(Integer, default=0, nullable=True)
+    score_override_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -1,0 +1,7 @@
+LYKA REALTY ORIGINAL PROJECT BACKUP
+Created: 2026-10-26T19:17:31+05:30
+Source: c:\Users\smani\Downloads\LYKA_Realty_AI_Local_AI_NoKey_Package\lyka-realty
+Target: c:\Users\smani\Downloads\LYKA_Realty_AI_Local_AI_NoKey_Package\lyka-realty-backup-original
+Status: Complete pre-completion backup created prior to any edits.
+Excluded: node_modules, .venv, __pycache__, .pytest_cache, dist.
+Preserved: All source code, assets, database copies (lyka_realty.db and backups), CSV data, configurations, and scripts.
