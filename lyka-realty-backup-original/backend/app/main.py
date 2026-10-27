@@ -90,16 +90,17 @@ app = FastAPI(
 # through the backend environment settings.
 configured_origins = list(settings.CORS_ORIGINS or [])
 
+configured_origins = list(settings.CORS_ORIGINS or [])
+
 required_origins = [
     "https://lyka-orcin.vercel.app",
+    "https://lyka-p0hs0vi63-jaga10.vercel.app",
+    "https://lyka-git-main-jaga10.vercel.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://lyka-p0hs0vi63-jaga10.vercel.app",
 ]
 
-allowed_origins = list(dict.fromkeys(
-    configured_origins + required_origins
-))
+allowed_origins = list(dict.fromkeys(configured_origins + required_origins))
 
 app.add_middleware(
     CORSMiddleware,
