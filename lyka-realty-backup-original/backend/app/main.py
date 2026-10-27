@@ -94,6 +94,7 @@ required_origins = [
     "https://lyka-orcin.vercel.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://lyka-p0hs0vi63-jaga10.vercel.app",
 ]
 
 allowed_origins = list(dict.fromkeys(
@@ -140,6 +141,8 @@ def serve_frontend(frontend_path: str = ""):
 
     index_file = FRONTEND_DIST / "index.html"
     if not index_file.is_file():
+
+        
         return JSONResponse(
             status_code=503,
             content={"detail": "Frontend build is missing; run the project startup script."},
