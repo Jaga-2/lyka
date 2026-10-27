@@ -55,8 +55,19 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         })
         .catch((error: Error) => {
           console.error('Unable to load saved properties:', error);
-          if (active) window.alert(`Saved properties could not be loaded: ${error.message}`);
+          const isAuthError = error?.message && (
+            error.message.includes('401') ||
+            error.message.includes('credentials were not provided') ||
+            error.message.includes('invalid') ||
+            error.message.includes('Unauthorized')
+          );
+          if (active && !isAuthError) {
+            window.alert(`Saved properties could not be loaded: ${error.message}`);
+          }
         });
+    } else {
+      setShortlist([]);
+      setShortlistUserId(null);
     }
     return () => {
       active = false;

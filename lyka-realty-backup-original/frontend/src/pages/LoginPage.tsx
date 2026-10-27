@@ -9,11 +9,6 @@ export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // If user navigated to /login/lead, redirect to lead lookup
-  if (location.pathname === '/login/lead') {
-    return <Navigate to="/lead/status" replace />;
-  }
-
   // Determine expected role from route
   const getExpectedRoleFromPath = (): string | undefined => {
     if (location.pathname === '/login/customer') return 'customer';
@@ -36,6 +31,11 @@ export const LoginPage: React.FC = () => {
   const [resetSent, setResetSent] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [resetError, setResetError] = useState('');
+
+  // If user navigated to /login/lead, redirect to lead lookup (after hook declarations)
+  if (location.pathname === '/login/lead') {
+    return <Navigate to="/lead/status" replace />;
+  }
 
   const roleTitles: Record<string, { title: string; subtitle: string; badge: string }> = {
     customer: {

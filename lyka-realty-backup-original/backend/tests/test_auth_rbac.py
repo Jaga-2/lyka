@@ -210,6 +210,43 @@ class AuthRBACTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/employee/leads").status_code, 403)
         self.assertEqual(self.client.get("/api/admin/stats").status_code, 403)
 
+    def test_login_with_x_request_token_header_returns_bearer_token_for_cross_origin_clients(self):
+        # 1. Standard login without x-request-token preserves ambient-cookie response (token omitted from JSON)
+        default_resp = self.client.post(
+            "/api/auth/login",
+            json={"email": self.customer.email, "password": "correct-horse-123"},
+        )
+        self.assertEqual(default_resp.status_code, 200)
+        self.assertIsNone(default_resp.json().get("access_token"))
+
+        # 2. Login with X-Request-Token header returns Bearer access_token for cross-origin clients
+        client_resp = self.client.post(
+            "/api/auth/login",
+            json={"email": self.customer.email, "password": "correct-horse-123"},
+            headers={"X-Request-Token": "true"},
+        )
+        self.assertEqual(client_resp.status_code, 200)
+        token = client_resp.json().get("access_token")
+        self.assertIsNotNone(token)
+        self.assertEqual(client_resp.json().get("token_type"), "bearer")
+
+        # 3. New client without ambient cookies can successfully access /customer/shortlist using Bearer token
+        bearer_client = TestClient(self.app)
+        shortlist_resp = bearer_client.get(
+            "/api/customer/shortlist",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(shortlist_resp.status_code, 200)
+        self.assertIsInstance(shortlist_resp.json(), list)
+
+        # 4. Without Bearer token or cookies, request receives 401 Unauthorized
+        unauth_resp = bearer_client.get("/api/customer/shortlist")
+        self.assertEqual(unauth_resp.status_code, 401)
+        self.assertEqual(
+            unauth_resp.json()["detail"],
+            "Authentication credentials were not provided or invalid",
+        )
+
     def test_login_rejects_wrong_password_and_unknown_email(self):
         wrong_password = self.client.post(
             "/api/auth/login",

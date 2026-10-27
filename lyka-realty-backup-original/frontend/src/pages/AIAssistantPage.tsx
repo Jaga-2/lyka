@@ -12,6 +12,7 @@ import {
   X,
   AlertCircle,
   Mic,
+  Volume2,
 } from 'lucide-react';
 import { VoiceAssistantOrb, VoiceState, VoiceLatencyMetrics } from '../components/VoiceAssistantOrb';
 import { PropertyCard } from '../components/PropertyCard';
@@ -31,16 +32,10 @@ export const AIAssistantPage: React.FC = () => {
   const conversationStorageKey = `lyka_ai_conversation_${storageSuffix}`;
   const { addToCompare, openSiteVisitModal } = useProperty();
 
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const saved = localStorage.getItem(chatStorageKey);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed.length > 0) return parsed;
-      } catch {}
-    }
-    return [];
-  });
+  // Clean session by default on each login
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [priorMessageCount, setPriorMessageCount] = useState(0);
+  const [showResumeBanner, setShowResumeBanner] = useState(false);
 
   const [inputText, setInputText] = useState('');
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
@@ -112,13 +107,88 @@ export const AIAssistantPage: React.FC = () => {
   // Auto-scroll chat stream
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    localStorage.setItem(chatStorageKey, JSON.stringify(messages));
+    if (messages.length > 0) {
+      localStorage.setItem(chatStorageKey, JSON.stringify(messages));
+    }
   }, [messages, streamingMessage, isThinking, chatStorageKey]);
 
   useEffect(() => {
     localStorage.setItem(conversationStorageKey, conversationId);
     localStorage.setItem(requirementsStorageKey, JSON.stringify(requirements));
   }, [conversationId, requirements, conversationStorageKey, requirementsStorageKey]);
+
+  // Session Privacy: Detect existing private conversation and offer explicit option to resume
+  useEffect(() => {
+    if (!user) return;
+    const saved = localStorage.getItem(chatStorageKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setPriorMessageCount(parsed.length);
+          if (messages.length === 0) {
+            setShowResumeBanner(true);
+          }
+        }
+      } catch {}
+    }
+  }, [user, chatStorageKey, messages.length]);
+
+  const resumePreviousConversation = useCallback(() => {
+    const saved = localStorage.getItem(chatStorageKey);
+    const savedConvId = localStorage.getItem(conversationStorageKey);
+    const savedReqs = localStorage.getItem(requirementsStorageKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed);
+        }
+      } catch {}
+    }
+    if (savedConvId) setConversationId(savedConvId);
+    if (savedReqs) {
+      try {
+        setRequirements(JSON.parse(savedReqs));
+      } catch {}
+    }
+    setShowResumeBanner(false);
+  }, [chatStorageKey, conversationStorageKey, requirementsStorageKey]);
+
+  const dismissResumeBanner = useCallback(() => {
+    setShowResumeBanner(false);
+  }, []);
+
+  // Audible voice playback on demand
+  const handleSpeakMessage = useCallback((text: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setVoiceError('Speech synthesis is not supported in this browser.');
+      return;
+    }
+    window.speechSynthesis.cancel();
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    }
+    const cleanText = text.replace(/[*_#`]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim();
+    if (!cleanText) return;
+    const isTamil = /[\u0B80-\u0BFF]/.test(cleanText);
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = isTamil ? 'ta-IN' : 'en-US';
+    const voices = window.speechSynthesis.getVoices();
+    const voice = isTamil
+      ? voices.find((v) => v.lang.toLowerCase().startsWith('ta'))
+      : voices.find((v) => v.lang.toLowerCase().startsWith('en') && (v.name.includes('Natural') || v.name.includes('Online') || v.name.includes('Google') || v.name.includes('Neural'))) || voices.find((v) => v.lang.toLowerCase().startsWith('en'));
+    if (voice) utterance.voice = voice;
+    utterance.rate = 1.05;
+    utterance.pitch = 1.0;
+    utterance.onerror = (e) => {
+      if (e.error !== 'canceled') {
+        setVoiceError('Speech playback failed: ' + e.error);
+      }
+    };
+    window.speechSynthesis.speak(utterance);
+    setVoiceError('');
+  }, []);
 
   // Prepopulate booking form if user logs in or updates
   useEffect(() => {
@@ -580,6 +650,48 @@ export const AIAssistantPage: React.FC = () => {
           </div>
         </div>
 
+        {/* Session Privacy: Resume previous conversation prompt */}
+        {showResumeBanner && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0.8rem 1.25rem',
+              backgroundColor: 'rgba(197, 160, 89, 0.12)',
+              border: '1px solid var(--border-gold)',
+              borderRadius: 'var(--radius-md)',
+              marginBottom: '1rem',
+              flexWrap: 'wrap',
+              gap: '10px',
+              animation: 'fadeIn 0.2s ease',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#fff', fontSize: '0.9rem' }}>
+              <Clock size={16} color="var(--gold)" />
+              <span>
+                You have a previous private conversation ({priorMessageCount} messages). Would you like to resume it?
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={resumePreviousConversation}
+                className="btn btn-gold btn-sm"
+              >
+                Resume Conversation
+              </button>
+              <button
+                type="button"
+                onClick={dismissResumeBanner}
+                className="btn btn-outline btn-sm"
+              >
+                Start Clean Session
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Requirements Live Drawer */}
         {showRequirementsDrawer && (
           <div
@@ -698,6 +810,7 @@ export const AIAssistantPage: React.FC = () => {
                     style={{
                       display: 'flex',
                       alignItems: 'center',
+                      justifyContent: 'space-between',
                       gap: '6px',
                       color: 'var(--gold)',
                       fontSize: '0.78rem',
@@ -705,8 +818,31 @@ export const AIAssistantPage: React.FC = () => {
                       marginBottom: '6px',
                     }}
                   >
-                    <Sparkles size={14} />
-                    <span>LYKA REALTY CONSULTANT</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Sparkles size={14} />
+                      <span>LYKA REALTY CONSULTANT</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleSpeakMessage(msg.content)}
+                      style={{
+                        background: 'transparent',
+                        border: '1px solid rgba(197, 160, 89, 0.4)',
+                        borderRadius: '6px',
+                        color: 'var(--gold)',
+                        padding: '2px 8px',
+                        fontSize: '0.72rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        transition: 'all 0.2s',
+                      }}
+                      title="Listen to audible voice response"
+                    >
+                      <Volume2 size={12} />
+                      <span>Play Voice</span>
+                    </button>
                   </div>
                 )}
                 {msg.content}

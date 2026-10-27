@@ -4,12 +4,27 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from sqlalchemy import inspect, text
 from fastapi.responses import FileResponse, JSONResponse
+import logging
 
 from .database import engine, Base
 from .config import settings, validate_runtime_settings
 from .routers import auth, properties, ai, visits, crm, telephony
+from .services.seed_service import seed_demo_accounts, seed_properties_if_empty
 
-FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+logger = logging.getLogger("lyka.main")
+
+
+def get_frontend_dist() -> Path:
+    candidates = [
+        Path(__file__).resolve().parents[2] / "frontend" / "dist",
+        Path(__file__).resolve().parents[1] / "frontend" / "dist",
+        Path.cwd() / "frontend" / "dist",
+        Path.cwd() / "dist",
+    ]
+    for candidate in candidates:
+        if (candidate / "index.html").is_file():
+            return candidate
+    return candidates[0]
 
 
 def ensure_conversation_workflow_columns():
@@ -67,6 +82,7 @@ def ensure_conversation_workflow_columns():
             if inspector.has_table(table_name):
                 connection.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_name})"))
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_runtime_settings()
@@ -74,7 +90,15 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_conversation_workflow_columns()
 
+    # Provision safe demo personas and inventory on empty database
+    try:
+        seed_demo_accounts()
+        seed_properties_if_empty()
+    except Exception as e:
+        logger.warning(f"LYKA auto-seed notice: {e}")
+
     yield
+
 
 app = FastAPI(
     title="LYKA AI — Real Estate Backend API",
@@ -83,23 +107,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
-
-# CORS
-# Allow the deployed Vercel frontend and any origins configured
-# through the backend environment settings.
+# CORS configuration
 configured_origins = list(settings.CORS_ORIGINS or [])
-
-configured_origins = list(settings.CORS_ORIGINS or [])
-
 required_origins = [
+    "https://lyka-1.onrender.com",
+    "https://lyka-2.onrender.com",
+    "https://lyka-realty-ai.onrender.com",
+    "https://lyka-realty-web.onrender.com",
     "https://lyka-orcin.vercel.app",
     "https://lyka-p0hs0vi63-jaga10.vercel.app",
     "https://lyka-git-main-jaga10.vercel.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
-
 allowed_origins = list(dict.fromkeys(configured_origins + required_origins))
 
 app.add_middleware(
@@ -108,8 +132,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
-
 
 # Include Routers under /api
 app.include_router(auth.router, prefix="/api")
@@ -140,18 +164,17 @@ def serve_frontend(frontend_path: str = ""):
     if frontend_path == "api" or frontend_path.startswith("api/"):
         return JSONResponse(status_code=404, content={"detail": "Not Found"})
 
-    index_file = FRONTEND_DIST / "index.html"
+    dist_dir = get_frontend_dist()
+    index_file = dist_dir / "index.html"
     if not index_file.is_file():
-
-        
         return JSONResponse(
             status_code=503,
             content={"detail": "Frontend build is missing; run the project startup script."},
         )
 
     if frontend_path:
-        requested_file = (FRONTEND_DIST / frontend_path).resolve()
-        if requested_file.is_relative_to(FRONTEND_DIST.resolve()) and requested_file.is_file():
+        requested_file = (dist_dir / frontend_path).resolve()
+        if requested_file.is_relative_to(dist_dir.resolve()) and requested_file.is_file():
             return FileResponse(requested_file)
 
     return FileResponse(index_file)

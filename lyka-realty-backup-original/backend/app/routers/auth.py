@@ -78,7 +78,11 @@ def register(
     csrf_token = generate_csrf_token()
     set_auth_cookies(response=response, token=token, csrf_token=csrf_token, request=request)
 
-    exposed_token = token if request.headers.get("x-request-token") == "true" or settings.APP_ENV == "test" else None
+    wants_token = (
+        request.headers.get("x-request-token", "").strip().lower() in ("true", "1", "yes")
+        or settings.APP_ENV == "test"
+    )
+    exposed_token = token if wants_token else None
     return TokenResponse(
         user=UserResponse.model_validate(new_user),
         access_token=exposed_token,
@@ -157,7 +161,11 @@ def login(
     csrf_token = generate_csrf_token()
     set_auth_cookies(response=response, token=token, csrf_token=csrf_token, request=request)
 
-    exposed_token = token if request.headers.get("x-request-token") == "true" or settings.APP_ENV == "test" else None
+    wants_token = (
+        request.headers.get("x-request-token", "").strip().lower() in ("true", "1", "yes")
+        or settings.APP_ENV == "test"
+    )
+    exposed_token = token if wants_token else None
     return TokenResponse(
         user=UserResponse.model_validate(user),
         access_token=exposed_token,

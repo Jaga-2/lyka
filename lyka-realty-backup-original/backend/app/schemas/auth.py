@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Literal, Optional
 
 class UserRegisterRequest(BaseModel):
@@ -20,8 +20,7 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool = True
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TokenResponse(BaseModel):
     user: UserResponse

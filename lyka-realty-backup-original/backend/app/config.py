@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     OPENAI_TTS_MODEL: str = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
     OPENAI_TTS_VOICE: str = os.getenv("OPENAI_TTS_VOICE", "alloy")
     AI_PROVIDER: Literal["openai", "gemini", "ollama"] = "ollama"
-    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
-    OLLAMA_MODEL: str = "qwen2.5:3b"
-    OLLAMA_TIMEOUT_SECONDS: float = 120.0
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+    OLLAMA_TIMEOUT_SECONDS: float = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "25.0"))
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = "gemini-flash-latest"
 
@@ -44,11 +44,34 @@ class Settings(BaseSettings):
     COOKIE_DOMAIN: Optional[str] = os.getenv("COOKIE_DOMAIN", None)
 
     CORS_ORIGINS: List[str] = [
+        "https://lyka-2.onrender.com",
+        "https://lyka-1.onrender.com",
+        "https://lyka-realty-ai.onrender.com",
+        "https://lyka-realty-web.onrender.com",
+        "https://lyka-orcin.vercel.app",
+        "https://lyka-p0hs0vi63-jaga10.vercel.app",
+        "https://lyka-git-main-jaga10.vercel.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://localhost:8000",
     ]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return []
+            if value.startswith("[") and value.endswith("]"):
+                try:
+                    import json
+                    return json.loads(value)
+                except Exception:
+                    pass
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
     @field_validator("DATABASE_URL")
     @classmethod

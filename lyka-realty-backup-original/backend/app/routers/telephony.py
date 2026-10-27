@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from ..database import get_db
 from ..models.user import User
@@ -37,8 +37,7 @@ class CallRecordDTO(BaseModel):
     callback_scheduled_at: Optional[str] = None
     created_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DNCRequest(BaseModel):
@@ -54,8 +53,7 @@ class TelephonySettingsDTO(BaseModel):
     max_concurrency: int
     monthly_budget_usd: float
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TelephonySettingsUpdate(BaseModel):

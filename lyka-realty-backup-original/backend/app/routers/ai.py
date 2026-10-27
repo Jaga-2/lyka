@@ -203,8 +203,8 @@ def _save_conversation_turn(
         or any(term in message_text.lower() for term in ("i like", "interested in this", "want this property", "இது பிடிக்கும்", "பிடிச்சிருக்கு"))
     )
     resolved_property_id = context.get("current_property_id")
-    current_property = next((prop for prop in props if prop.id == resolved_property_id), None)
-    if current_property is None and resolved_property_id and (property_interest or action_type == "site_visit"):
+    current_property = None
+    if resolved_property_id and (property_interest or action_type == "site_visit"):
         current_property = (
             db.query(Property)
             .filter(Property.id == resolved_property_id, Property.is_active.is_(True))
@@ -355,11 +355,12 @@ def ai_chat(
     if body.synthesize_audio:
         audio_base64, audio_error = _create_speech(reply, updated_reqs.get("language", "en"))
 
+    property_dtos = [to_response_dto(prop, updated_reqs) for prop in props]
     db.commit()
     return AIChatResponse(
         response=reply,
         conversation_id=conv_id,
-        properties=[to_response_dto(prop, updated_reqs) for prop in props],
+        properties=property_dtos,
         extracted_requirements=updated_reqs,
         action_type="handoff" if action_type == "agent" else action_type,
         audio_base64=audio_base64,
@@ -434,6 +435,7 @@ def ai_chat_stream(
             current_requirements=requirements,
             context=context,
         )
+        property_dtos = [to_response_dto(prop, updated_reqs).model_dump() for prop in props]
         db.commit()
     except Exception:
         db.rollback()
@@ -445,7 +447,7 @@ def ai_chat_stream(
     def event_stream():
         meta_data = {
             "conversation_id": conv_id,
-            "properties": [to_response_dto(prop, updated_reqs).model_dump() for prop in props],
+            "properties": property_dtos,
             "extracted_requirements": updated_reqs,
             "action_type": "handoff" if action_type == "agent" else action_type,
             "language": updated_reqs.get("language", "en"),
@@ -496,7 +498,7 @@ def ai_chat_stream(
         done_data = {
             "conversation_id": conv_id,
             "response": full_reply,
-            "properties": [to_response_dto(prop, updated_reqs).model_dump() for prop in props],
+            "properties": property_dtos,
             "extracted_requirements": updated_reqs,
             "action_type": "handoff" if action_type == "agent" else action_type,
             "audio_base64": audio_base64,
@@ -514,4 +516,110 @@ def ai_chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/conversations")
+def list_my_conversations(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_auth),
+):
+    """List isolated conversation history for the currently authenticated user only."""
+    convs = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == current_user.id)
+        .order_by(Conversation.updated_at.desc())
+        .limit(20)
+        .all()
+    )
+    result = []
+    for c in convs:
+        last_msg = (
+            db.query(Message)
+            .filter(Message.conversation_id == c.id)
+            .order_by(Message.id.desc())
+            .first()
+        )
+        msg_count = db.query(Message).filter(Message.conversation_id == c.id).count()
+        context = {}
+        try:
+            context = json.loads(c.context_json or "{}")
+        except Exception:
+            pass
+        reqs = {}
+        try:
+            reqs = json.loads(context.get("requirements_json", "{}"))
+        except Exception:
+            pass
+        result.append({
+            "id": c.id,
+            "created_at": c.created_at.isoformat() if c.created_at else "",
+            "updated_at": c.updated_at.isoformat() if c.updated_at else "",
+            "message_count": msg_count,
+            "last_message": last_msg.content[:120] if last_msg else None,
+            "requirements": reqs,
+        })
+    return result
+
+
+@router.get("/conversations/{conv_id}")
+def get_my_conversation(
+    conv_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_auth),
+):
+    """Retrieve full history for a specific conversation belonging to the authenticated user only."""
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conv.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="This conversation belongs to another customer")
+    messages = (
+        db.query(Message)
+        .filter(Message.conversation_id == conv_id)
+        .order_by(Message.id.asc())
+        .all()
+    )
+    context = {}
+    try:
+        context = json.loads(conv.context_json or "{}")
+    except Exception:
+        pass
+    reqs = {}
+    try:
+        reqs = json.loads(context.get("requirements_json", "{}"))
+    except Exception:
+        pass
+    return {
+        "id": conv.id,
+        "messages": [
+            {
+                "id": m.id,
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at.isoformat() if m.created_at else "",
+            }
+            for m in messages
+        ],
+        "requirements": reqs,
+        "context": context,
+    }
+
+
+@router.delete("/conversations/{conv_id}")
+def delete_my_conversation(
+    conv_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_auth),
+):
+    """Delete a conversation belonging to the authenticated user only."""
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conv.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="This conversation belongs to another customer")
+    db.query(Message).filter(Message.conversation_id == conv_id).delete()
+    db.delete(conv)
+    db.commit()
+    return {"status": "deleted", "conversation_id": conv_id}
+
 

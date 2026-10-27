@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -30,8 +30,7 @@ class SiteVisitResponse(BaseModel):
     confirmation_notes: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class LeadResponse(BaseModel):
     id: int
@@ -72,8 +71,7 @@ class LeadResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class LeadStatusUpdateRequest(BaseModel):
     status: str

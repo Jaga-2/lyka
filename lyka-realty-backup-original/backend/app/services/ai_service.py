@@ -37,7 +37,7 @@ _SAFE_PROVIDER_ERROR_CODES = {
     "INVALID_API_KEY",
 }
 _MAX_PROVIDER_ATTEMPTS = 3
-_MAX_RETRY_DELAY_SECONDS = 5.0
+_MAX_RETRY_DELAY_SECONDS = 1.0
 
 _ollama_client: Optional[httpx.Client] = None
 
@@ -45,7 +45,7 @@ def _get_ollama_client() -> httpx.Client:
     global _ollama_client
     if _ollama_client is None or _ollama_client.is_closed:
         _ollama_client = httpx.Client(
-            timeout=httpx.Timeout(settings.OLLAMA_TIMEOUT_SECONDS, connect=5.0),
+            timeout=httpx.Timeout(settings.OLLAMA_TIMEOUT_SECONDS, connect=3.0),
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
         )
     return _ollama_client
@@ -391,7 +391,36 @@ def extract_structured_requirements_heuristics(message: str, current: Dict[str, 
     return updated
 
 
-def _intent_for_message(message: str, requirements: Dict[str, Any], has_current_property: bool = False) -> str:
+_GREETING_PATTERN = re.compile(
+    r"^\s*(hi|hello|hey|greetings|good\s+(?:morning|afternoon|evening)|vanakkam|வணக்கம்|namaste|salaam|ahlan)(?:\s+(?:there|all|everyone|lyka))?[\s!.,?]*$",
+    re.IGNORECASE,
+)
+
+
+def _is_pure_greeting(message: str) -> bool:
+    clean = message.strip()
+    return bool(_GREETING_PATTERN.match(clean))
+
+
+def _missing_core_requirements(requirements: Dict[str, Any]) -> List[str]:
+    missing = []
+    if not (requirements.get("purpose") or requirements.get("buy_or_rent")):
+        missing.append("intent (buy or rent)")
+    if not requirements.get("location"):
+        missing.append("preferred location")
+    if requirements.get("bedrooms") is None and not requirements.get("property_type"):
+        missing.append("property type or bedrooms")
+    if requirements.get("budget_target") is None and requirements.get("budget_max") is None and requirements.get("budget") is None:
+        missing.append("approximate budget")
+    return missing
+
+
+def _intent_for_message(
+    message: str,
+    requirements: Dict[str, Any],
+    has_current_property: bool = False,
+    is_pure_greeting: bool = False,
+) -> str:
     lower = message.lower()
     if any(term in lower for term in ("agent", "human", "real person", "call me", "phone me", "broker", "agent venum", "agent பேச", "பேசணும்")):
         return "agent"
@@ -403,10 +432,26 @@ def _intent_for_message(message: str, requirements: Dict[str, Any], has_current_
         return "details"
     if any(term in lower for term in ("this property", "this one", "இந்த property", "இந்த வீடு", "இதுதான்", "இது நல்லதா", "இதோட", "indha property", "indha veedu", "idhoda", "ithu nalla")):
         return "details"
-    if any(key in requirements for key in ("location", "bedrooms", "budget", "budget_target", "property_type")):
+
+    if is_pure_greeting:
+        return "greeting"
+
+    has_location = bool(requirements.get("location"))
+    has_spec = requirements.get("bedrooms") is not None or bool(requirements.get("property_type"))
+    has_explicit_cmd = any(term in lower for term in ("show", "find", "search", "வேண்டும்", "venum", "options", "list", "available", "cheaper"))
+
+    # Recommendations require specific location criteria or all core requirements gathered
+    if has_location and (has_spec or has_explicit_cmd):
         return "search"
-    if any(term in lower for term in ("show", "find", "search", "வேண்டும்", "venum")):
+    if has_explicit_cmd and has_location:
         return "search"
+    if not _missing_core_requirements(requirements):
+        return "search"
+
+    # If partial requirements exist (e.g. only buy/rent, only property type, only budget), continue consultation:
+    if requirements.get("purpose") or requirements.get("buy_or_rent") or has_location or has_spec or requirements.get("budget_target") is not None or requirements.get("budget"):
+        return "consultation"
+
     return "general"
 
 
@@ -464,6 +509,44 @@ def _local_fallback_reply(action: str, requirements: Dict[str, Any], properties:
             return tanglish or en
         return en
 
+    if action == "greeting":
+        return say(
+            "Hello! Welcome to LYKA Realty. Are you looking to buy or rent a property in Dubai?",
+            "வணக்கம்! LYKA Realty-க்கு வரவேற்கிறோம். துபாயில் வீடு வாங்கவா அல்லது வாடகைக்கு எடுக்க விரும்புகிறீர்களா?",
+            "Vanakkam! LYKA Realty-kku welcome. Dubai-la property vaanga poringala illa rent-kku paakuringala?",
+        )
+    if action == "consultation":
+        missing = _missing_core_requirements(requirements)
+        if "intent (buy or rent)" in missing:
+            return say(
+                "Are you looking to buy or rent a property in Dubai?",
+                "துபாயில் வீடு வாங்கவா அல்லது வாடகைக்கு எடுக்க விரும்புகிறீர்களா?",
+                "Dubai-la property vaanga poringala illa rent-kku paakuringala?",
+            )
+        if "preferred location" in missing:
+            return say(
+                "Which location in Dubai do you prefer, such as Dubai Marina, Downtown, or Business Bay?",
+                "துபாயில் எந்தப் பகுதி உங்களுக்கு விருப்பம்? உதாரணமாக Dubai Marina, Downtown அல்லது Business Bay?",
+                "Dubai-la endha location prefer panringha? Like Dubai Marina, Downtown, or Business Bay?",
+            )
+        if "property type or bedrooms" in missing:
+            return say(
+                "How many bedrooms or what type of property are you looking for?",
+                "எத்தனை படுக்கையறைகள் (BHK) அல்லது எந்த வகையான வீடு தேவை?",
+                "Ethanai bedrooms (BHK) illa endha type property thevai?",
+            )
+        if "approximate budget" in missing:
+            return say(
+                "What is your approximate annual budget for this property?",
+                "இந்த வீட்டிற்கான உத்தேச ஆண்டு பட்ஜெட் என்ன?",
+                "Indha property-kku ungaloda approximate budget enna?",
+            )
+        return say(
+            "Could you share a bit more about your requirements so I can find the best matches?",
+            "பொருத்தமான வீடுகளைக் கண்டறிய உங்கள் தேவைகள் பற்றி மேலும் பகிர்ந்துகொள்ள முடியுமா?",
+            "Ungalukku matching properties kidaikka requirements pathi innum konjam sollunga.",
+        )
+
     if action in {"advisor", "agent"}:
         return say(
             "I can help prepare your request for the LYKA team. I cannot confirm an agent is assigned from this chat alone. Please share your preferred contact method and a suitable time.",
@@ -511,7 +594,13 @@ def prepare_ai_conversation_context(
     requirements = extract_structured_requirements_heuristics(message, current_requirements)
     context = context or {}
     language = requirements["language"]
-    action = _intent_for_message(message, requirements, context.get("current_property_id") is not None)
+    is_greeting = _is_pure_greeting(message)
+    action = _intent_for_message(
+        message,
+        requirements,
+        has_current_property=context.get("current_property_id") is not None,
+        is_pure_greeting=is_greeting,
+    )
     requirements["intent"] = action
     shown_ids = context.get("shown_property_ids", [])
     current_property_id = context.get("current_property_id")
@@ -527,9 +616,11 @@ def prepare_ai_conversation_context(
         ).first()
     properties: List[Property] = []
 
-    if action == "details" and current_property:
+    if action in {"greeting", "consultation", "general"}:
+        properties = []
+    elif action == "details" and current_property:
         properties = [current_property]
-    if action == "site_visit" and current_property:
+    elif action == "site_visit" and current_property:
         properties = [current_property]
     elif action == "compare":
         properties = db.query(Property).filter(
@@ -578,6 +669,33 @@ def prepare_ai_conversation_context(
         if language == "mixed"
         else "English"
     )
+
+    missing_requirements = _missing_core_requirements(requirements)
+    missing_str = ", ".join(missing_requirements) if missing_requirements else "None (all core requirements collected)"
+
+    mode_guidance = ""
+    if action == "greeting":
+        mode_guidance = f"""
+GREETING TURN (CURRENT INTENT: greeting):
+- The customer just greeted you. Respond with a warm, natural greeting only in {language_name}.
+- Introduce LYKA Realty and ask whether they want to buy or rent in Dubai, or how you can assist them today.
+- DO NOT list or recommend any properties yet. Keep response to 1-2 friendly sentences."""
+    elif action == "consultation":
+        mode_guidance = f"""
+CONSULTATION & REQUIREMENT GATHERING (CURRENT INTENT: consultation):
+- Current requirements gathered: {json.dumps(requirements, ensure_ascii=False)}
+- Missing required details: {missing_str}
+- DO NOT recommend or display properties yet.
+- Acknowledge what the customer stated warmly.
+- Ask ONLY for the next missing requirement in a single clear follow-up question.
+- Do not repeat questions already answered. Keep reply conversational and concise for voice."""
+    elif action == "search":
+        mode_guidance = f"""
+PROPERTY RECOMMENDATIONS (CURRENT INTENT: search):
+- All required details have been collected, or the customer explicitly requested to see listings.
+- Present the verified matching listings provided in VERIFIED DATABASE PROPERTY FACTS below.
+- Explain specifically why each listing matches the customer's stated requirements (e.g. matching location, bedroom count, and budget fit).
+- Use verified facts only from the database below; NEVER invent properties or listing details."""
 
     system = f"""
 You are LYKA, a professional, friendly real-estate consultant for LYKA Realty.
@@ -632,6 +750,8 @@ CURRENT CUSTOMER REQUIREMENTS:
 CURRENT CUSTOMER INTENT:
 {action}
 
+{mode_guidance}
+
 Database facts: {json.dumps(listing_facts, ensure_ascii=False)}
 
 VERIFIED DATABASE PROPERTY FACTS:
@@ -685,7 +805,7 @@ def process_ai_conversation(
                         "messages": messages,
                         "stream": False,
                         "keep_alive": "30m",
-                        "options": {"temperature": 0.3, "num_predict": 350},
+                        "options": {"temperature": 0.3, "num_predict": 220},
                     },
                     timeout=settings.OLLAMA_TIMEOUT_SECONDS,
                 )
@@ -767,7 +887,7 @@ def stream_ai_conversation(
                             "messages": messages,
                             "stream": True,
                             "keep_alive": "30m",
-                            "options": {"temperature": 0.3, "num_predict": 350},
+                            "options": {"temperature": 0.3, "num_predict": 220},
                         },
                         timeout=settings.OLLAMA_TIMEOUT_SECONDS,
                     ) as response:

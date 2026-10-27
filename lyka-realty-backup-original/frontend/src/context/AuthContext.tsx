@@ -54,8 +54,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    // Clear obsolete and insecure credentials from browser storage on startup
-    purgeSensitiveStorage();
     let active = true;
 
     api.getMe()
@@ -63,7 +61,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (active) setUser(currentUser);
       })
       .catch(() => {
-        if (active) setUser(null);
+        if (active) {
+          setUser(null);
+          api.clearToken();
+        }
       })
       .finally(() => {
         if (active) setIsLoading(false);
@@ -72,6 +73,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSessionExpiryHandler(() => {
       if (active) {
         setUser(null);
+        api.clearToken();
         purgeSensitiveStorage();
       }
     });
@@ -86,7 +88,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const result = await api.login({ email, password, expected_role: expectedRole });
-      purgeSensitiveStorage();
       setUser(result.user);
       return result.user;
     } finally {
@@ -98,7 +99,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const result = await api.register({ email, password, full_name: fullName, phone });
-      purgeSensitiveStorage();
       setUser(result.user);
     } finally {
       setIsLoading(false);
@@ -112,6 +112,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('Logout API error:', err);
     }
     setUser(null);
+    api.clearToken();
     purgeSensitiveStorage();
   };
 

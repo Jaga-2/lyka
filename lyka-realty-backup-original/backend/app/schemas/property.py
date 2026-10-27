@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 
 class PropertyResponse(BaseModel):
@@ -26,8 +26,7 @@ class PropertyResponse(BaseModel):
     investment_yield: Optional[float] = None
     is_active: bool = True
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PropertySearchRequest(BaseModel):
     query: Optional[str] = None

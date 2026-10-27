@@ -272,6 +272,9 @@ export const VoiceAssistantOrb: React.FC<VoiceAssistantOrbProps> = ({
         }
       };
 
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
       window.speechSynthesis.speak(utterance);
     },
     [language, isMuted, getBestVoice, onInterrupt, onVoiceError]
@@ -334,8 +337,12 @@ export const VoiceAssistantOrb: React.FC<VoiceAssistantOrbProps> = ({
           onInterrupt();
         }
       };
-      void audio.play().catch(() => {
-        if (playTokenRef.current === currentToken) onInterrupt();
+      void audio.play().catch((err) => {
+        console.warn('Audio playback blocked by browser:', err);
+        if (playTokenRef.current === currentToken) {
+          onVoiceError?.('Audio autoplay was blocked by your browser. Click "Play Voice" to listen.');
+          onInterrupt();
+        }
       });
       return;
     }
@@ -366,6 +373,45 @@ export const VoiceAssistantOrb: React.FC<VoiceAssistantOrbProps> = ({
       }
     };
   }, [state, lastAiResponse, audioBase64, isMuted, onInterrupt, onVoiceError, speakSentence]);
+
+  const playManualVoice = useCallback(() => {
+    if (audioBase64) {
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      const audio = new Audio(`data:audio/mpeg;base64,${audioBase64}`);
+      audioRef.current = audio;
+      audio.onended = () => onInterrupt();
+      audio.onerror = () => onVoiceError?.('The speech audio could not be played.');
+      void audio.play().catch((err) => {
+        onVoiceError?.('Browser blocked audio playback: ' + (err?.message || 'autoplay restriction'));
+      });
+      return;
+    }
+
+    if (lastAiResponse && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+      const cleanText = lastAiResponse.replace(/[*_#`]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim();
+      if (!cleanText) return;
+      const tamil = ['ta', 'tanglish', 'mixed'].includes(language) || /[\u0B80-\u0BFF]/.test(cleanText);
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = tamil ? 'ta-IN' : 'en-US';
+      const voice = getBestVoice(language, tamil);
+      if (voice) utterance.voice = voice;
+      utterance.rate = 1.05;
+      utterance.pitch = 1.0;
+      utterance.onend = () => onInterrupt();
+      utterance.onerror = (e) => {
+        if (e.error !== 'canceled') {
+          onVoiceError?.('Speech playback error: ' + e.error);
+        }
+      };
+      window.speechSynthesis.speak(utterance);
+    } else if (!('speechSynthesis' in window)) {
+      onVoiceError?.('Voice synthesis is unavailable in this browser environment.');
+    }
+  }, [audioBase64, lastAiResponse, language, getBestVoice, onInterrupt, onVoiceError]);
 
   const requestMicPermission = async () => {
     try {
@@ -673,6 +719,32 @@ export const VoiceAssistantOrb: React.FC<VoiceAssistantOrbProps> = ({
           {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
           <span>{isMuted ? 'Muted' : 'Voice Audio'}</span>
         </button>
+
+        {/* Play/Replay Voice button */}
+        {Boolean(lastAiResponse || audioBase64) && (
+          <button
+            type="button"
+            onClick={playManualVoice}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px',
+              background: 'rgba(197, 160, 89, 0.15)',
+              border: '1px solid var(--border-gold)',
+              borderRadius: '9999px',
+              padding: '4px 12px',
+              color: 'var(--gold)',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+            }}
+            title="Play or replay AI voice response"
+          >
+            <Volume2 size={13} />
+            <span>Play Voice</span>
+          </button>
+        )}
 
         {/* Interrupt button if speaking */}
         {state === 'speaking' && (

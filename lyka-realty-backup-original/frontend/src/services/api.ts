@@ -10,7 +10,20 @@ import {
   UserRole
 } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+const resolveApiBaseUrl = (): string => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host === 'lyka-1.onrender.com' || host === 'localhost' || host === '127.0.0.1') {
+      return '/api';
+    }
+  }
+  return 'https://lyka-1.onrender.com/api';
+};
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 type SessionExpiryCallback = () => void;
 let sessionExpiryHandler: SessionExpiryCallback | null = null;
@@ -19,8 +32,54 @@ export const setSessionExpiryHandler = (handler: SessionExpiryCallback | null) =
   sessionExpiryHandler = handler;
 };
 
+const TOKEN_STORAGE_KEY = 'lyka_auth_token';
+
 class ApiService {
   private csrfToken: string | null = null;
+  private token: string | null = null;
+
+  constructor() {
+    this.token = this.loadToken();
+  }
+
+  private loadToken(): string | null {
+    try {
+      if (typeof window !== 'undefined') {
+        return localStorage.getItem(TOKEN_STORAGE_KEY) || sessionStorage.getItem(TOKEN_STORAGE_KEY) || null;
+      }
+    } catch {
+      // Storage might be restricted
+    }
+    return null;
+  }
+
+  public getToken(): string | null {
+    if (!this.token) {
+      this.token = this.loadToken();
+    }
+    return this.token;
+  }
+
+  public setToken(token: string | null): void {
+    this.token = token;
+    try {
+      if (typeof window !== 'undefined') {
+        if (token) {
+          localStorage.setItem(TOKEN_STORAGE_KEY, token);
+          sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+        } else {
+          localStorage.removeItem(TOKEN_STORAGE_KEY);
+          sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+        }
+      }
+    } catch {
+      // Storage might be restricted
+    }
+  }
+
+  public clearToken(): void {
+    this.setToken(null);
+  }
 
   public getCsrfToken(): string | null {
     if (this.csrfToken) return this.csrfToken;
@@ -52,8 +111,10 @@ class ApiService {
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const method = (options.method || 'GET').toUpperCase();
+    const token = this.getToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers as Record<string, string>),
     };
 
@@ -77,6 +138,7 @@ class ApiService {
 
       if (response.status === 401) {
         if (endpoint !== '/auth/login' && endpoint !== '/auth/me') {
+          this.clearToken();
           sessionExpiryHandler?.();
         }
       }
@@ -99,10 +161,16 @@ class ApiService {
   async register(data: { email: string; password: string; full_name: string; phone?: string }): Promise<{ user: User; access_token?: string; csrf_token?: string }> {
     const result = await this.request<{ user: User; access_token?: string; csrf_token?: string }>('/auth/register', {
       method: 'POST',
+      headers: {
+        'X-Request-Token': 'true',
+      },
       body: JSON.stringify(data),
     });
     if (result.csrf_token) {
       this.csrfToken = result.csrf_token;
+    }
+    if (result.access_token) {
+      this.setToken(result.access_token);
     }
     return result;
   }
@@ -110,16 +178,23 @@ class ApiService {
   async login(data: { email: string; password: string; expected_role?: string }): Promise<{ user: User; access_token?: string; csrf_token?: string }> {
     const result = await this.request<{ user: User; access_token?: string; csrf_token?: string }>('/auth/login', {
       method: 'POST',
+      headers: {
+        'X-Request-Token': 'true',
+      },
       body: JSON.stringify(data),
     });
     if (result.csrf_token) {
       this.csrfToken = result.csrf_token;
+    }
+    if (result.access_token) {
+      this.setToken(result.access_token);
     }
     return result;
   }
 
   async logout(): Promise<{ message: string }> {
     this.csrfToken = null;
+    this.clearToken();
     return this.request<{ message: string }>('/auth/logout', {
       method: 'POST',
     });
@@ -220,9 +295,11 @@ class ApiService {
     language: string;
     audio_error?: string;
   }> {
+    const token = this.getToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
     let csrf = this.getCsrfToken();
     if (!csrf) {
@@ -325,6 +402,37 @@ class ApiService {
     return this.request('/properties/compare', {
       method: 'POST',
       body: JSON.stringify({ property_ids: propertyIds, priorities: userPriorities || [] }),
+    });
+  }
+
+  // Isolated AI Conversations
+  async getConversations(): Promise<Array<{
+    id: string;
+    title: string;
+    updated_at: string;
+    message_count: number;
+    last_message: string;
+  }>> {
+    return this.request('/ai/conversations');
+  }
+
+  async getConversation(id: string): Promise<{
+    id: string;
+    messages: Array<{
+      id: number;
+      role: 'user' | 'assistant' | 'system';
+      content: string;
+      created_at: string;
+      extracted_requirements?: string;
+    }>;
+    context: Record<string, any>;
+  }> {
+    return this.request(`/ai/conversations/${encodeURIComponent(id)}`);
+  }
+
+  async deleteConversation(id: string): Promise<{ status: string }> {
+    return this.request(`/ai/conversations/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
     });
   }
 
