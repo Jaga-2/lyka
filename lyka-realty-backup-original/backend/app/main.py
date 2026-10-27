@@ -84,13 +84,30 @@ app = FastAPI(
 )
 
 # CORS
+
+# CORS
+# Allow the deployed Vercel frontend and any origins configured
+# through the backend environment settings.
+configured_origins = list(settings.CORS_ORIGINS or [])
+
+required_origins = [
+    "https://lyka-orcin.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+allowed_origins = list(dict.fromkeys(
+    configured_origins + required_origins
+))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Include Routers under /api
 app.include_router(auth.router, prefix="/api")
