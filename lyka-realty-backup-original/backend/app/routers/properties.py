@@ -18,6 +18,31 @@ from ..services.match_service import calculate_explainable_match
 
 router = APIRouter(prefix="/properties", tags=["Properties"])
 
+DEFAULT_PROPERTY_IMAGES = {
+    "Apartment": [
+        "https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=1200&q=80",
+    ],
+    "Villa": [
+        "https://images.unsplash.com/photo-1613977257363-707ba9348227?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1580587771525-78b9dba3b914?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=1200&q=80",
+    ],
+    "Townhouse": [
+        "https://images.unsplash.com/photo-1600585154526-990dced4db0d?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=1200&q=80",
+    ],
+    "Penthouse": [
+        "https://images.unsplash.com/photo-1567496898669-ee935f5f647a?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1502005229762-ee1b2b8ba32f?auto=format&fit=crop&w=1200&q=80",
+    ],
+}
+
+
 def to_response_dto(prop: Property, reqs: dict = None) -> PropertyResponse:
     amenities_list = []
     if prop.amenities:
@@ -32,6 +57,11 @@ def to_response_dto(prop: Property, reqs: dict = None) -> PropertyResponse:
             images_list = json.loads(prop.images)
         except Exception:
             images_list = [prop.images]
+
+    if not images_list:
+        pool = DEFAULT_PROPERTY_IMAGES.get(prop.property_type or "Apartment", DEFAULT_PROPERTY_IMAGES["Apartment"])
+        selected_img = pool[(prop.id or 0) % len(pool)]
+        images_list = [selected_img]
 
     score, reasons = calculate_explainable_match(prop, reqs or {})
 
@@ -74,7 +104,7 @@ def search_properties(body: PropertySearchRequest, db: Session = Depends(get_db)
             Property.location.ilike(q),
             Property.city.ilike(q),
         ]
-        bed_match = re.search(r"\b(studio|[0-9]+)\s*(?:bhk|bed(?:room)?s?)\b", raw_q, re.I)
+        bed_match = re.search(r"\b(studio|[0-9]+)[\s-]*(?:bhk|bed(?:room)?s?)\b", raw_q, re.I)
         if bed_match:
             b_val = 0 if bed_match.group(1).lower() == "studio" else int(bed_match.group(1))
             query_conditions.append(Property.beds == b_val)

@@ -385,7 +385,7 @@ def _parse_amount(message: str) -> Optional[float]:
         raw_number = float(match.group("number").replace(",", ""))
         unit = (match.group("unit") or "").lower()
         after_number = message[match.end() : match.end() + 16]
-        if not unit and re.match(r"\s*(?:bhk|beds?|bedrooms?)\b", after_number, re.IGNORECASE):
+        if not unit and re.match(r"[\s-]*(?:bhk|beds?|bedrooms?)\b", after_number, re.IGNORECASE):
             continue
         if unit in {"million", "millions", "mn", "m"}:
             multiplier = 1_000_000
@@ -426,12 +426,12 @@ def extract_structured_requirements_heuristics(message: str, current: Dict[str, 
             updated["location"] = _LOCATIONS[key]
             break
 
-    bed_match = re.search(r"\b(studio|[0-9]+\s*(?:bhk|bed(?:room)?s?))\b", lower)
+    bed_match = re.search(r"\b(studio|[0-9]+[\s-]*(?:bhk|bed(?:room)?s?))\b", lower)
     if bed_match:
         bedroom_text = bed_match.group(1)
         updated["bedrooms"] = 0 if bedroom_text == "studio" else int(re.search(r"\d+", bedroom_text).group())
 
-    bath_match = re.search(r"\b([1-9])\s*(?:bath(?:room)?s?)\b", lower)
+    bath_match = re.search(r"\b([1-9])[\s-]*(?:bath(?:room)?s?)\b", lower)
     if bath_match:
         updated["bathrooms"] = int(bath_match.group(1))
 
