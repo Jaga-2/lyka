@@ -1,4 +1,5 @@
 import json
+import re
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
@@ -65,63 +66,87 @@ def search_properties(body: PropertySearchRequest, db: Session = Depends(get_db)
     query = db.query(Property).filter(Property.is_active.is_(True))
 
     if body.query:
-        q = f"%{body.query}%"
-        query = query.filter(
-            or_(
-                Property.title.ilike(q),
-                Property.address.ilike(q),
-                Property.location.ilike(q),
-            )
-        )
+        raw_q = body.query.strip()
+        q = f"%{raw_q}%"
+        query_conditions = [
+            Property.title.ilike(q),
+            Property.address.ilike(q),
+            Property.location.ilike(q),
+            Property.city.ilike(q),
+        ]
+        bed_match = re.search(r"\b(studio|[0-9]+)\s*(?:bhk|bed(?:room)?s?)\b", raw_q, re.I)
+        if bed_match:
+            b_val = 0 if bed_match.group(1).lower() == "studio" else int(bed_match.group(1))
+            query_conditions.append(Property.beds == b_val)
+            query_conditions.append(Property.title.ilike(f"%{b_val} BHK%"))
+        query = query.filter(or_(*query_conditions))
 
     if body.location:
+        loc = body.location.strip()
         query = query.filter(
             or_(
-                Property.location.ilike(f"%{body.location}%"),
-                Property.address.ilike(f"%{body.location}%"),
+                Property.location.ilike(f"%{loc}%"),
+                Property.address.ilike(f"%{loc}%"),
+                Property.city.ilike(f"%{loc}%"),
             )
         )
 
-    if body.purpose:
-        query = query.filter(Property.purpose.ilike(body.purpose))
-
     if body.city:
-        query = query.filter(Property.city.ilike(f"%{body.city}%"))
+        query = query.filter(Property.city.ilike(f"%{body.city.strip()}%"))
 
     if body.beds is not None:
-        query = query.filter(Property.beds == body.beds)
+        if body.beds >= 4:
+            query = query.filter(Property.beds >= 4)
+        else:
+            query = query.filter(Property.beds == body.beds)
 
     if body.baths is not None:
         query = query.filter(Property.baths >= body.baths)
 
     if body.property_type:
-        query = query.filter(Property.property_type.ilike(f"%{body.property_type}%"))
+        query = query.filter(Property.property_type.ilike(f"%{body.property_type.strip()}%"))
 
     if body.furnishing:
-        query = query.filter(Property.furnishing.ilike(f"%{body.furnishing}%"))
-
-    is_rent = body.purpose != "For Sale"
-    if body.min_price is not None:
-        if is_rent:
-            query = query.filter(Property.rent_price >= body.min_price)
+        f = body.furnishing.strip()
+        if f.lower() in ("furnished", "unfurnished"):
+            query = query.filter(func.lower(Property.furnishing) == f.lower())
         else:
-            query = query.filter(Property.sale_price >= body.min_price)
+            query = query.filter(Property.furnishing.ilike(f"%{f}%"))
+
+    # Purpose and Price handling:
+    purpose_str = (body.purpose or "").strip().lower()
+    has_sale_in_db = db.query(Property.id).filter(Property.is_active.is_(True), Property.purpose.ilike("%Sale%")).first() is not None
+
+    if "rent" in purpose_str:
+        query = query.filter(Property.purpose.ilike("%For Rent%"))
+        is_rent = True
+    elif "sale" in purpose_str or "buy" in purpose_str:
+        if has_sale_in_db:
+            query = query.filter(Property.purpose.ilike("%For Sale%"))
+            is_rent = False
+        else:
+            # Fall back to rental inventory if database has rental-only data
+            is_rent = True
+    else:
+        is_rent = True
+
+    price_col = Property.rent_price if is_rent else Property.sale_price
+
+    if body.min_price is not None:
+        query = query.filter(price_col >= body.min_price)
 
     if body.max_price is not None:
-        if is_rent:
-            query = query.filter(Property.rent_price <= body.max_price)
-        else:
-            query = query.filter(Property.sale_price <= body.max_price)
+        query = query.filter(price_col <= body.max_price)
 
     # Sort
     if body.sort_by == "price_desc":
-        query = query.order_by(Property.rent_price.desc() if is_rent else Property.sale_price.desc())
+        query = query.order_by(price_col.desc())
     elif body.sort_by == "beds":
         query = query.order_by(Property.beds.desc())
     elif body.sort_by == "area":
         query = query.order_by(Property.area_sqft.desc())
     else:
-        query = query.order_by(Property.rent_price.asc() if is_rent else Property.sale_price.asc())
+        query = query.order_by(price_col.asc())
 
     total = query.count()
     items = query.offset(body.offset or 0).limit(body.limit or 30).all()

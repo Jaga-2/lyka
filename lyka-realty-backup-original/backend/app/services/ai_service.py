@@ -12,7 +12,7 @@ import openai
 from google import genai
 from google.genai import types as genai_types
 from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -271,18 +271,96 @@ def _provider_failure(
 
 
 _LOCATIONS = {
+    # Dubai Marina & JBR
     "dubai marina": "Dubai Marina",
     "marina": "Dubai Marina",
+    "jbr": "Jumeirah Beach Residence (JBR)",
+    "jumeirah beach residence": "Jumeirah Beach Residence (JBR)",
+    # Downtown & Business Bay
     "downtown dubai": "Downtown Dubai",
     "downtown": "Downtown Dubai",
-    "palm jumeirah": "Palm Jumeirah",
-    "palm": "Palm Jumeirah",
     "business bay": "Business Bay",
-    "dubai hills": "Dubai Hills Estate",
+    "difc": "DIFC",
+    "city walk": "City Walk",
+    # Palm & Islands
+    "palm jumeirah": "Palm Jumeirah",
+    "the palm": "Palm Jumeirah",
+    "palm": "Palm Jumeirah",
+    "bluewaters": "Bluewaters Island",
+    "bluewaters island": "Bluewaters Island",
+    # JVC & JLT
     "jvc": "Jumeirah Village Circle",
+    "jumeirah village circle": "Jumeirah Village Circle",
     "jlt": "Jumeirah Lake Towers",
+    "jumeirah lake towers": "Jumeirah Lake Towers",
+    "jvt": "Jumeirah Village Triangle",
+    # Hills & Estates
+    "dubai hills": "Dubai Hills Estate",
+    "dubai hills estate": "Dubai Hills Estate",
+    "dubai creek harbour": "Dubai Creek Harbour",
+    "creek harbour": "Dubai Creek Harbour",
+    "meydan": "Meydan City",
+    "meydan city": "Meydan City",
+    "mbr city": "Mohammed Bin Rashid City",
+    "mohammed bin rashid city": "Mohammed Bin Rashid City",
+    # Other Dubai Communities
+    "arabian ranches": "Arabian Ranches",
+    "damac hills": "DAMAC Hills",
+    "akoya": "DAMAC Hills",
+    "town square": "Town Square",
+    "dubai south": "Dubai South",
+    "arjan": "Arjan",
+    "dubai silicon oasis": "Dubai Silicon Oasis",
+    "silicon oasis": "Dubai Silicon Oasis",
+    "dso": "Dubai Silicon Oasis",
+    "motor city": "Motor City",
+    "sports city": "Dubai Sports City",
+    "al furjan": "Al Furjan",
+    "discovery gardens": "Discovery Gardens",
+    "international city": "International City",
+    "al barsha": "Al Barsha",
+    "barsha": "Al Barsha",
+    "deira": "Deira",
+    "bur dubai": "Bur Dubai",
+    # Abu Dhabi
     "al reem island": "Al Reem Island",
+    "reem island": "Al Reem Island",
     "yas island": "Yas Island",
+    "saadiyat island": "Saadiyat Island",
+    "saadiyat": "Saadiyat Island",
+    "khalifa city": "Khalifa City",
+    "al raha beach": "Al Raha Beach",
+    "raha beach": "Al Raha Beach",
+    "mohammed bin zayed city": "Mohammed Bin Zayed City",
+    "mbz city": "Mohammed Bin Zayed City",
+    "al khalidiyah": "Al Khalidiyah",
+    "corniche": "Corniche Area",
+    "corniche area": "Corniche Area",
+    "al shamkha": "Al Shamkha",
+    "madinat al riyadh": "Madinat Al Riyadh",
+    # Sharjah
+    "aljada": "Aljada",
+    "muwaileh": "Muwaileh",
+    "muwailih": "Muwailih Commercial",
+    "muwailih commercial": "Muwailih Commercial",
+    "al nahda": "Al Nahda",
+    "al taawun": "Al Taawun",
+    "al majaz": "Al Majaz",
+    "al khan": "Al Khan",
+    # Ajman
+    "al nuaimiya": "Al Nuaimiya",
+    "al rawda": "Al Rawda",
+    "al yasmeen": "Al Yasmeen",
+    # Emirates / Cities
+    "dubai": "Dubai",
+    "abu dhabi": "Abu Dhabi",
+    "sharjah": "Sharjah",
+    "ajman": "Ajman",
+    "al ain": "Al Ain",
+    "ras al khaimah": "Ras Al Khaimah",
+    "rak": "Ras Al Khaimah",
+    "fujairah": "Fujairah",
+    "umm al quwain": "Umm Al Quwain",
 }
 _AMOUNT = re.compile(
     r"(?<![\w.])(?P<number>\d[\d,]*(?:\.\d+)?)\s*"
@@ -323,7 +401,8 @@ def _parse_amount(message: str) -> Optional[float]:
         context = message[max(0, match.start() - 32) : match.end() + 32]
         has_budget_cue = bool(
             unit
-            or re.search(r"\b(aed|dirham|dirhams|budget|under|below|less than|up to|around|approximately)\b", context, re.I)
+            or re.search(r"\b(aed|dirham|dirhams|budget|under|below|less than|up to|around|approximately|for|at|within|max|min)\b", context, re.I)
+            or (raw_number >= 5000 and not (1900 <= raw_number <= 2099))
         )
         if has_budget_cue and amount > 0:
             return amount
@@ -466,38 +545,101 @@ def search_database_properties(
     limit: int = 4,
     cheaper_than: Optional[float] = None,
 ) -> List[Property]:
-    query = db.query(Property).filter(Property.is_active.is_(True))
-    purpose = requirements.get("purpose") or requirements.get("buy_or_rent")
-    if purpose in {"rent", "buy"}:
-        query = query.filter(Property.purpose.ilike("%For Rent%" if purpose == "rent" else "%For Sale%"))
-
+    purpose = (requirements.get("purpose") or requirements.get("buy_or_rent") or "").strip().lower()
     location = requirements.get("location")
-    if location:
-        query = query.filter(or_(Property.location.ilike(f"%{location}%"), Property.address.ilike(f"%{location}%")))
-    if requirements.get("bedrooms") is not None:
-        query = query.filter(Property.beds == int(requirements["bedrooms"]))
-    if requirements.get("property_type"):
-        query = query.filter(Property.property_type.ilike(f"%{requirements['property_type']}%"))
-    if requirements.get("furnished") is not None:
-        query = query.filter(Property.furnishing.ilike("Furnished" if requirements["furnished"] else "Unfurnished"))
-
+    bedrooms = requirements.get("bedrooms")
+    prop_type = requirements.get("property_type")
+    furnished = requirements.get("furnished")
     amount_min = requirements.get("budget_min")
     amount_max = requirements.get("budget_max")
     if amount_max is None and requirements.get("budget_target") is not None:
         amount_max = requirements["budget_target"]
-    if purpose == "rent":
-        price_column = Property.rent_price
-    elif purpose == "buy":
-        price_column = Property.sale_price
-    else:
-        price_column = Property.rent_price
-    if amount_min is not None:
-        query = query.filter(price_column >= float(amount_min))
+
+    price_column = Property.sale_price if purpose == "buy" else Property.rent_price
+
+    def build_query(
+        apply_budget: bool = True,
+        budget_headroom: float = 1.0,
+        apply_furnishing: bool = True,
+        apply_prop_type: bool = True,
+        apply_cheaper: bool = True,
+        min_price_floor: float = 10.0,
+    ):
+        q = db.query(Property).filter(Property.is_active.is_(True))
+        if purpose in {"rent", "buy"}:
+            q = q.filter(Property.purpose.ilike("%For Rent%" if purpose == "rent" else "%For Sale%"))
+
+        if location:
+            q = q.filter(
+                or_(
+                    Property.location.ilike(f"%{location}%"),
+                    Property.address.ilike(f"%{location}%"),
+                    Property.city.ilike(f"%{location}%"),
+                )
+            )
+
+        if bedrooms is not None:
+            beds_int = int(bedrooms)
+            if beds_int >= 4:
+                q = q.filter(Property.beds >= 4)
+            else:
+                q = q.filter(Property.beds == beds_int)
+
+        if apply_prop_type and prop_type:
+            q = q.filter(Property.property_type.ilike(f"%{prop_type}%"))
+
+        if apply_furnishing and furnished is not None:
+            target_f = "furnished" if furnished else "unfurnished"
+            q = q.filter(func.lower(Property.furnishing) == target_f)
+
+        if min_price_floor > 0:
+            q = q.filter(price_column >= min_price_floor)
+
+        if apply_budget:
+            if amount_min is not None:
+                q = q.filter(price_column >= float(amount_min))
+            if amount_max is not None:
+                q = q.filter(price_column <= float(amount_max) * budget_headroom)
+
+        if apply_cheaper and cheaper_than is not None:
+            q = q.filter(price_column < cheaper_than)
+
+        return q
+
+    # Level 0: Strict search with exact user constraints
+    results = build_query().order_by(price_column.asc()).limit(limit).all()
+    if results:
+        return results
+
+    # If purpose is "buy" and 0 records found in DB, do not relax into rental listings
+    if purpose == "buy":
+        return []
+
+    # Level 1: Progressive relaxation of budget (30% headroom)
     if amount_max is not None:
-        query = query.filter(price_column <= float(amount_max))
-    if cheaper_than is not None:
-        query = query.filter(price_column < cheaper_than)
-    return query.order_by(price_column.asc()).limit(limit).all()
+        results = build_query(budget_headroom=1.30).order_by(price_column.asc()).limit(limit).all()
+        if results:
+            return results
+
+    # Level 2: Relax furnishing constraint
+    if furnished is not None:
+        results = build_query(budget_headroom=1.30 if amount_max else 1.0, apply_furnishing=False).order_by(price_column.asc()).limit(limit).all()
+        if results:
+            return results
+
+    # Level 3: Relax budget completely (find best priced available listings in desired location/beds)
+    if amount_max is not None or amount_min is not None or cheaper_than is not None:
+        results = build_query(apply_budget=False, apply_furnishing=False, apply_cheaper=False).order_by(price_column.asc()).limit(limit).all()
+        if results:
+            return results
+
+    # Level 4: Relax property type constraint
+    if prop_type:
+        results = build_query(apply_budget=False, apply_furnishing=False, apply_cheaper=False, apply_prop_type=False).order_by(price_column.asc()).limit(limit).all()
+        if results:
+            return results
+
+    return []
 
 
 def _local_fallback_reply(action: str, requirements: Dict[str, Any], properties: List[Property], language: str) -> str:
