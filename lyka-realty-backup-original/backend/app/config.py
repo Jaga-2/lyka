@@ -73,6 +73,15 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            if value.startswith("postgres://"):
+                value = value.replace("postgres://", "postgresql://", 1)
+        return value
+
     @field_validator("DATABASE_URL")
     @classmethod
     def resolve_sqlite_database_path(cls, value: str) -> str:
